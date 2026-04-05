@@ -1,0 +1,94 @@
+#!/bin/bash
+
+# 3D V-Cache is on the die containing cpu 0
+# This is an easy way to get a mask matching that set of cores
+X3D_CORES_MASK="$(cat /sys/devices/system/cpu/cpu0/cache/index3/shared_cpu_map)"
+
+# PID 1 has access to all cores by default
+# This is an easy way to get a the mask matching all cores in the system
+ALL_CORES_MASK="$(taskset -p 1 | cut -d':' -f2 | tr -d ' ')"
+
+# Use XOR to get the non-X3D set
+NON_X3D_CORES_MASK="$(printf '%x' $(( "0x$ALL_CORES_MASK" ^ "0x$X3D_CORES_MASK" )))"
+
+# List of all games / processes to search for
+### TODO: split out to ~/.config/x3dify.conf
+PROCESS_NAMES="timberborn vrchat steam wine wivrn wayvr"
+
+# Time between affinity checks
+SCAN_INTERVAL=120
+
+cleanup() {
+	# loop through all user threads and restore default affinity
+	local _pid
+	echo "Restoring default cpu masks for all threads."
+	for _pid in $(ps x -o pid); do
+		taskset -a -p "$ALL_CORES_MASK" "$_pid" >/dev/null 2>&1
+	done
+}
+
+main-loop() {
+	local _ps_entry _pid _cmd _cmd_short _name _match_found _current_mask _target_mask
+
+	# subshell to contain shopt & IFS changes
+	(
+		# disable case sensitivity for pattern matching
+		shopt -s nocasematch
+		
+		# enable extended globbing
+		shopt -s extglob
+
+		# use newline as delimiter
+		IFS=$'\n'
+
+		# reformat pattern variable to work with IFS changes
+		PROCESS_NAMES=$(echo "$PROCESS_NAMES" | tr ' ' '\n')
+
+		# infinite loop as background service
+		while true; do
+
+			# loop over all current user processes
+			for _ps_entry in $(ps x -o pid=,command=); do
+				# use extglobbing to strip leading spaces from _ps_entry
+				_ps_entry="${_ps_entry##+([[:space:]])}"
+				_pid=$(echo "$_ps_entry" | cut -d' ' -f1)
+				_cmd=$(echo "$_ps_entry" | cut -d' ' -f2-)
+				_cmd_short=$(echo "$_cmd" | cut -d' ' -f1)
+
+				# get the current cpu mask of the process
+				_current_mask=$(taskset -p "$_pid" | cut -d':' -f2 | tr -d ' ')
+
+				# check if each process matches ANY of the process names provided
+				_match_found=0
+				for _name in $PROCESS_NAMES; do
+					if [[ "$_cmd" == *"$_name"* ]]; then
+						_match_found=1
+					fi
+				done
+
+				if [[ "$_match_found" == "1" ]]; then
+					# this process should be tied to X3D
+					_target_mask="$X3D_CORES_MASK"
+				else
+					# this process should be excluded from X3D
+					_target_mask="$NON_X3D_CORES_MASK"
+				fi
+				
+				if ! [[ "$_current_mask" == "$_target_mask" ]]; then
+					# cpu mask is not correct for this process. fix it!
+					echo "$_current_mask -> $_target_mask : $_pid ($_cmd_short) "
+					taskset -a -p "$_target_mask" "$_pid" >/dev/null 2>&1
+				else
+					echo "$_pid: ok"
+				fi
+			done
+
+			# wait between scans
+			sleep $SCAN_INTERVAL
+		done
+	)
+}
+
+trap cleanup EXIT
+main-loop
+
