@@ -16,7 +16,7 @@ NON_X3D_CORES_MASK="$(printf '%x' $(( "0x$ALL_CORES_MASK" ^ "0x$X3D_CORES_MASK" 
 PROCESS_NAMES="timberborn vrchat steam wine wivrn wayvr"
 
 # Time between affinity checks
-SCAN_INTERVAL=120
+SCAN_INTERVAL=60
 
 cleanup() {
 	# loop through all user threads and restore default affinity
@@ -34,7 +34,7 @@ main-loop() {
 	(
 		# disable case sensitivity for pattern matching
 		shopt -s nocasematch
-		
+
 		# enable extended globbing
 		shopt -s extglob
 
@@ -57,7 +57,10 @@ main-loop() {
 
 				# get the current cpu mask of the process
 				_current_mask=$(taskset -p "$_pid" | cut -d':' -f2 | tr -d ' ')
-
+				
+				# taskset doesn't include leading zeros for some reason; fix it if needed
+				_current_mask=$(printf "%0""${#ALL_CORES_MASK}""x" "0x""$_current_mask")
+				
 				# check if each process matches ANY of the process names provided
 				_match_found=0
 				for _name in $PROCESS_NAMES; do
@@ -73,13 +76,13 @@ main-loop() {
 					# this process should be excluded from X3D
 					_target_mask="$NON_X3D_CORES_MASK"
 				fi
-				
+
 				if ! [[ "$_current_mask" == "$_target_mask" ]]; then
 					# cpu mask is not correct for this process. fix it!
-					echo "$_current_mask -> $_target_mask : $_pid ($_cmd_short) "
+					echo "$_pid: $_current_mask -> $_target_mask ($_cmd_short)"
 					taskset -a -p "$_target_mask" "$_pid" >/dev/null 2>&1
 				else
-					echo "$_pid: ok"
+					echo "$_pid: ok                   ($_cmd_short)"
 				fi
 			done
 
