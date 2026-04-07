@@ -58,31 +58,34 @@ main-loop() {
 				# get the current cpu mask of the process
 				_current_mask=$(taskset -p "$_pid" | cut -d':' -f2 | tr -d ' ')
 				
-				# taskset doesn't include leading zeros for some reason; fix it if needed
-				_current_mask=$(printf "%0""${#ALL_CORES_MASK}""x" "0x""$_current_mask")
-				
-				# check if each process matches ANY of the process names provided
-				_match_found=0
-				for _name in $PROCESS_NAMES; do
-					if [[ "$_cmd" == *"$_name"* ]]; then
-						_match_found=1
+				# skip this process if anything went wrong with taskset
+				if ! [[ -z $_current_mask ]]; then
+					# taskset doesn't include leading zeros for some reason; fix it if needed
+					_current_mask=$(printf "%0""${#ALL_CORES_MASK}""x" "0x""$_current_mask")
+					
+					# check if each process matches ANY of the process names provided
+					_match_found=0
+					for _name in $PROCESS_NAMES; do
+						if [[ "$_cmd" == *"$_name"* ]]; then
+							_match_found=1
+						fi
+					done
+
+					if [[ "$_match_found" == "1" ]]; then
+						# this process should be tied to X3D
+						_target_mask="$X3D_CORES_MASK"
+					else
+						# this process should be excluded from X3D
+						_target_mask="$NON_X3D_CORES_MASK"
 					fi
-				done
 
-				if [[ "$_match_found" == "1" ]]; then
-					# this process should be tied to X3D
-					_target_mask="$X3D_CORES_MASK"
-				else
-					# this process should be excluded from X3D
-					_target_mask="$NON_X3D_CORES_MASK"
-				fi
-
-				if ! [[ "$_current_mask" == "$_target_mask" ]]; then
-					# cpu mask is not correct for this process. fix it!
-					echo "$_pid: $_current_mask -> $_target_mask ($_cmd_short)"
-					taskset -a -p "$_target_mask" "$_pid" >/dev/null 2>&1
-				else
-					echo "$_pid: ok                   ($_cmd_short)"
+					if ! [[ "$_current_mask" == "$_target_mask" ]]; then
+						# cpu mask is not correct for this process. fix it!
+						echo "$_pid: $_current_mask -> $_target_mask ($_cmd_short)"
+						taskset -a -p "$_target_mask" "$_pid" >/dev/null 2>&1
+					else
+						echo "$_pid: ok                   ($_cmd_short)"
+					fi
 				fi
 			done
 
